@@ -10,7 +10,7 @@
       <div class="w-full overflow-x-hidden overflow-y-auto bg-primary rounded-lg border border-border p-5" style="max-height: 75%" @click.stop>
         <!-- Intro -->
         <div class="mb-5">
-          <p class="text-sm text-fg-muted uppercase tracking-wider mb-2">{{ $strings.LabelSkipChapterIntro }}</p>
+          <p class="text-sm text-fg-muted tracking-wider mb-2">{{ $strings.LabelSkipChapterIntro }}</p>
           <div class="flex items-center">
             <ui-toggle-switch v-model="skipIntro" class="flex-shrink-0" />
             <input
@@ -37,7 +37,7 @@
 
         <!-- Outro -->
         <div class="mb-6">
-          <p class="text-sm text-fg-muted uppercase tracking-wider mb-2">{{ $strings.LabelSkipChapterOutro }}</p>
+          <p class="text-sm text-fg-muted tracking-wider mb-2">{{ $strings.LabelSkipChapterOutro }}</p>
           <div class="flex items-center">
             <ui-toggle-switch v-model="skipOutro" class="flex-shrink-0" />
             <input
