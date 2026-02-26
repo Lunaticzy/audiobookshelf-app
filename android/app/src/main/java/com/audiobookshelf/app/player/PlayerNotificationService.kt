@@ -136,6 +136,10 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   // Cache latest search so it wont trigger again when returning from series for example
   private var cachedSearch: String = ""
   private var cachedSearchResults: MutableList<MediaBrowserCompat.MediaItem> = mutableListOf()
+  private var isSkippingIntroOutro = false
+  private var skipTargetTime: Double? = null
+  private var skipSafetyRunnable: Runnable? = null
+  private val skipHandler = Handler(Looper.getMainLooper())
 
   /*
      Service related stuff
@@ -1054,6 +1058,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   fun sendClientMetadata(playerState: PlayerState) {
     val duration = currentPlaybackSession?.getTotalDuration() ?: 0.0
     clientEventEmitter?.onMetadata(PlaybackMetadata(duration, getCurrentTimeSeconds(), playerState))
+    
+    // 检查并执行intro/outro跳过
+    checkAndSkipIntroOutro()
   }
 
   fun getMediaPlayer(): String {
@@ -2196,6 +2203,98 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               )
               .setExtras(customActionExtras)
               .build()
+    }
+  }
+  
+  // Intro/Outro skip detection — called on every metadata update
+  private fun checkAndSkipIntroOutro() {
+    // Once playback position reaches the skip target, clear the guard flag so normal checks can resume
+    if (isSkippingIntroOutro) {
+      val target = skipTargetTime
+      if (target != null && getCurrentTimeSeconds() >= target - 0.5) {
+        isSkippingIntroOutro = false
+        skipTargetTime = null
+        // Return here: let the next tick evaluate zones at the new position.
+        // Continuing immediately could re-trigger a skip before the player has settled,
+        // causing a cascade of skips every 5 seconds.
+        return
+      } else {
+        return
+      }
+    }
+
+    val skipIntro = mediaManager.getSkipIntro()
+    val skipOutro = mediaManager.getSkipOutro()
+
+    if (!skipIntro && !skipOutro) return
+
+    val currentTimeSeconds = getCurrentTimeSeconds()
+    val currentChapter = getCurrentBookChapter() ?: return
+
+    val globalIntroDuration = mediaManager.getGlobalIntroDuration()
+    val globalOutroDuration = mediaManager.getGlobalOutroDuration()
+
+    var introEndTime = currentChapter.start
+    var outroStartTime = currentChapter.end
+
+    if (skipIntro) {
+      introEndTime = currentChapter.start + globalIntroDuration
+    }
+    // Clamp: intro must not extend past chapter end
+    introEndTime = minOf(introEndTime, currentChapter.end)
+
+    if (skipOutro) {
+      outroStartTime = currentChapter.end - globalOutroDuration
+    }
+    // Clamp: outro must not begin before chapter start
+    outroStartTime = maxOf(outroStartTime, currentChapter.start)
+
+    // Guard: skip if intro and outro zones overlap (chapter shorter than combined durations)
+    if (introEndTime > outroStartTime) return
+
+    fun doSkip(targetTime: Double) {
+      // Cancel any previous safety timeout to prevent it from clearing a subsequent skip's guard
+      skipSafetyRunnable?.let { skipHandler.removeCallbacks(it) }
+      isSkippingIntroOutro = true
+      skipTargetTime = targetTime
+      seekPlayer((targetTime * 1000).toLong())
+      // Safety fallback: clear flag if position-based reset never fires (e.g. seek fails)
+      val runnable = Runnable {
+        isSkippingIntroOutro = false
+        skipTargetTime = null
+        skipSafetyRunnable = null
+      }
+      skipSafetyRunnable = runnable
+      skipHandler.postDelayed(runnable, 5000)
+    }
+
+    // Check intro zone
+    if (skipIntro && currentTimeSeconds >= currentChapter.start && currentTimeSeconds < introEndTime) {
+      val targetTime = introEndTime + 0.5
+      Log.d(tag, "Skip intro: from ${currentTimeSeconds}s to ${targetTime}s")
+      doSkip(targetTime)
+      return
+    }
+
+    // Check outro zone
+    if (skipOutro && currentTimeSeconds >= outroStartTime && currentTimeSeconds < currentChapter.end) {
+      val nextChapter: BookChapter? = getNextBookChapter()
+      if (nextChapter == null) {
+        // Last chapter — seek to chapter end
+        Log.d(tag, "Skip outro: from ${currentTimeSeconds}s to chapter end ${currentChapter.end}s")
+        doSkip(currentChapter.end)
+        return
+      }
+      // If skipIntro is also enabled, combine outro+intro into a single seek to avoid two sequential jumps
+      var targetTime = nextChapter.start
+      if (skipIntro) {
+        val nextIntroDuration = globalIntroDuration
+        targetTime = nextChapter.start + nextIntroDuration + 0.5
+        Log.d(tag, "Skip outro+intro: from ${currentTimeSeconds}s to ${targetTime}s")
+      } else {
+        Log.d(tag, "Skip outro: from ${currentTimeSeconds}s to next chapter ${targetTime}s")
+      }
+      doSkip(targetTime)
     }
   }
 }

@@ -62,6 +62,8 @@
             <p class="text-xl font-mono text-success">{{ sleepTimeRemainingPretty }}</p>
           </div>
 
+          <span v-if="$platform !== 'ios'" class="material-symbols text-3xl text-fg-muted cursor-pointer" @click.stop="showIntroOutroDurationDialog">keyboard_double_arrow_right</span>
+
           <span class="material-symbols text-3xl text-fg cursor-pointer" :class="chapters.length ? 'text-opacity-75' : 'text-opacity-10'" @click="clickChaptersBtn">format_list_bulleted</span>
         </div>
       </div>
@@ -107,6 +109,7 @@
 
     <modals-chapters-modal v-model="showChapterModal" :current-chapter="currentChapter" :chapters="chapters" :playback-rate="currentPlaybackRate" @select="selectChapter" />
     <modals-dialog v-model="showMoreMenuDialog" :items="menuItems" width="80vw" @action="clickMenuAction" />
+    <modals-intro-outro-duration-modal v-model="showIntroOutroDurationModal" />
   </div>
 </template>
 
@@ -154,7 +157,11 @@ export default {
         useChapterTrack: false,
         useTotalTrack: true,
         scaleElapsedTimeBySpeed: true,
-        lockUi: false
+        lockUi: false,
+        skipIntro: false,
+        skipOutro: false,
+        globalIntroDuration: 10,
+        globalOutroDuration: 10
       },
       isLoading: false,
       isDraggingCursor: false,
@@ -166,7 +173,11 @@ export default {
       coverRgb: 'rgb(55, 56, 56)',
       coverBgIsLight: false,
       titleMarquee: null,
-      isRefreshingUI: false
+      isRefreshingUI: false,
+      isSkippingIntroOutro: false,
+      skipTargetTime: null,
+      skipSafetyTimeoutId: null,
+      showIntroOutroDurationModal: false
     }
   },
   watch: {
@@ -571,6 +582,11 @@ export default {
         }
       }
 
+      // Check and execute intro/outro skip (not supported on iOS)
+      if (this.$platform !== 'ios') {
+        this.checkAndSkipIntroOutro()
+      }
+
       this.updateTimestamp()
       this.updateTrack()
     },
@@ -776,6 +792,24 @@ export default {
         AbsAudioPlayer.setChapterTrack({ enabled: this.playerSettings.useChapterTrack })
       }
     },
+    syncSkipSettings() {
+      // Skip settings are not supported on iOS for now
+      if (this.$platform === 'ios') return
+      
+      AbsAudioPlayer.setSkipSettings({
+        skipIntro: this.playerSettings.skipIntro,
+        skipOutro: this.playerSettings.skipOutro,
+        globalIntroDuration: this.playerSettings.globalIntroDuration,
+        globalOutroDuration: this.playerSettings.globalOutroDuration
+      })
+    },
+    playerSettingsUpdated(ps) {
+      if (ps.skipIntro !== undefined) this.playerSettings.skipIntro = !!ps.skipIntro
+      if (ps.skipOutro !== undefined) this.playerSettings.skipOutro = !!ps.skipOutro
+      if (ps.globalIntroDuration !== undefined) this.playerSettings.globalIntroDuration = ps.globalIntroDuration
+      if (ps.globalOutroDuration !== undefined) this.playerSettings.globalOutroDuration = ps.globalOutroDuration
+      this.syncSkipSettings()
+    },
     forceCloseDropdownMenu() {
       if (this.$refs.dropdownMenu && this.$refs.dropdownMenu.closeMenu) {
         this.$refs.dropdownMenu.closeMenu()
@@ -811,7 +845,12 @@ export default {
         this.playerSettings.useTotalTrack = !!savedPlayerSettings.useTotalTrack
         this.playerSettings.lockUi = !!savedPlayerSettings.lockUi
         this.playerSettings.scaleElapsedTimeBySpeed = !!savedPlayerSettings.scaleElapsedTimeBySpeed
+        this.playerSettings.skipIntro = !!savedPlayerSettings.skipIntro
+        this.playerSettings.skipOutro = !!savedPlayerSettings.skipOutro
+        this.playerSettings.globalIntroDuration = savedPlayerSettings.globalIntroDuration ?? 10
+        this.playerSettings.globalOutroDuration = savedPlayerSettings.globalOutroDuration ?? 10
       }
+      this.syncSkipSettings()
     },
     savePlayerSettings() {
       return this.$localStore.setPlayerSettings({ ...this.playerSettings })
@@ -951,6 +990,96 @@ export default {
     },
     showProgressSyncSuccess() {
       this.syncStatus = this.$constants.SyncStatus.SUCCESS
+    },
+    showIntroOutroDurationDialog() {
+      this.showIntroOutroDurationModal = true
+    },
+    checkAndSkipIntroOutro() {
+      // Once position reaches the skip target, clear the guard flag so normal checks can resume
+      if (this.isSkippingIntroOutro) {
+        if (this.skipTargetTime !== null && this.currentTime >= this.skipTargetTime - 0.5) {
+          this.isSkippingIntroOutro = false
+          this.skipTargetTime = null
+          // Return here: let the next timeupdate tick evaluate zones at the new position.
+          // Continuing immediately could re-trigger a skip before the player has settled,
+          // causing a cascade of skips every 5 seconds.
+          return
+        } else {
+          return
+        }
+      }
+
+      const skipIntro = this.playerSettings.skipIntro
+      const skipOutro = this.playerSettings.skipOutro
+      const globalIntroDuration = this.playerSettings.globalIntroDuration
+      const globalOutroDuration = this.playerSettings.globalOutroDuration
+
+      if (!this.currentChapter || (!skipIntro && !skipOutro)) {
+        return
+      }
+
+      const chapter = this.currentChapter
+      let introEndTime = chapter.start
+      let outroStartTime = chapter.end
+
+      if (skipIntro) {
+        introEndTime = chapter.start + globalIntroDuration
+      }
+      // Clamp: intro must not extend past chapter end
+      introEndTime = Math.min(introEndTime, chapter.end)
+
+      if (skipOutro) {
+        outroStartTime = chapter.end - globalOutroDuration
+      }
+      // Clamp: outro must not begin before chapter start
+      outroStartTime = Math.max(outroStartTime, chapter.start)
+
+      // Guard: skip if intro and outro zones overlap (chapter shorter than combined durations)
+      if (introEndTime > outroStartTime) {
+        return
+      }
+
+      const doSkip = (targetTime) => {
+        // Cancel any previous safety timeout to prevent it from clearing a subsequent skip's guard
+        clearTimeout(this.skipSafetyTimeoutId)
+        this.isSkippingIntroOutro = true
+        this.skipTargetTime = targetTime
+        this.seek(targetTime)
+        // Safety fallback: clear flag if position-based reset never fires (e.g. seek fails)
+        this.skipSafetyTimeoutId = setTimeout(() => {
+          this.isSkippingIntroOutro = false
+          this.skipTargetTime = null
+          this.skipSafetyTimeoutId = null
+        }, 5000)
+      }
+
+      // Check intro zone
+      if (skipIntro && this.currentTime >= chapter.start && this.currentTime < introEndTime) {
+        const targetTime = introEndTime + 0.5
+        console.log(`[AudioPlayer] Skip intro: from ${this.currentTime}s to ${targetTime}s`)
+        doSkip(targetTime)
+        return
+      }
+
+      // Check outro zone
+      if (skipOutro && this.currentTime >= outroStartTime && this.currentTime < chapter.end) {
+        if (this.nextChapter) {
+          // If skipIntro is also enabled, combine outro+intro into a single seek to avoid two sequential jumps
+          let targetTime = this.nextChapter.start
+          if (skipIntro) {
+            const nextIntroDuration = globalIntroDuration
+            targetTime = this.nextChapter.start + nextIntroDuration + 0.5
+            console.log(`[AudioPlayer] Skip outro+intro: from ${this.currentTime}s to ${targetTime}s`)
+          } else {
+            console.log(`[AudioPlayer] Skip outro: from ${this.currentTime}s to next chapter ${targetTime}s`)
+          }
+          doSkip(targetTime)
+        } else {
+          // Last chapter — seek to chapter end
+          console.log(`[AudioPlayer] Skip outro: from ${this.currentTime}s to chapter end ${chapter.end}s`)
+          doSkip(chapter.end)
+        }
+      }
     }
   },
   mounted() {
@@ -964,6 +1093,7 @@ export default {
     window.addEventListener('resize', this.screenOrientationChange)
 
     this.$eventBus.$on('minimize-player', this.minimizePlayerEvt)
+    this.$eventBus.$on('player-settings', this.playerSettingsUpdated)
     document.body.addEventListener('touchstart', this.touchstart, { passive: false })
     document.body.addEventListener('touchend', this.touchend)
     document.body.addEventListener('touchmove', this.touchmove)
@@ -985,6 +1115,7 @@ export default {
 
     this.forceCloseDropdownMenu()
     this.$eventBus.$off('minimize-player', this.minimizePlayerEvt)
+    this.$eventBus.$off('player-settings', this.playerSettingsUpdated)
     document.body.removeEventListener('touchstart', this.touchstart)
     document.body.removeEventListener('touchend', this.touchend)
     document.body.removeEventListener('touchmove', this.touchmove)

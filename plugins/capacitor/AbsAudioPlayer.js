@@ -159,6 +159,11 @@ class AbsAudioPlayerWeb extends WebPlugin {
   }
 
   // PluginMethod
+  setSkipSettings({ skipIntro, skipOutro, globalIntroDuration, globalOutroDuration }) {
+    // Web mock: skip logic is handled entirely by JS on web; no native settings to sync
+  }
+
+  // PluginMethod
   async getCurrentTime() {
     return {
       value: this.overallCurrentTime,

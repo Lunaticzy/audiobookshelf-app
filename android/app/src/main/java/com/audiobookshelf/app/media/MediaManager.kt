@@ -45,6 +45,12 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
   var serverLibraries = listOf<Library>()
 
   var userSettingsPlaybackRate:Float? = null
+  
+  // Intro/Outro跳过设置
+  private var userSettingsSkipIntro:Boolean? = null
+  private var userSettingsSkipOutro:Boolean? = null
+  private var userSettingsGlobalIntroDuration:Double? = null
+  private var userSettingsGlobalOutroDuration:Double? = null
 
   fun getIsLibrary(id:String) : Boolean {
     return serverLibraries.find { it.id == id } != null
@@ -128,6 +134,169 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         userSettingsPlaybackRate = newRate
         Log.d(tag, "Created and saved userSettings JSON from Android Auto with playbackRate=$newRate")
       }
+    }
+  }
+
+  // Intro/Outro设置相关方法
+
+  // Reads the Capacitor-stored playerSettings JSON from SharedPrefs.
+  // JS $localStore.setPlayerSettings() writes to key "playerSettings" in CapacitorStorage.
+  private fun getCapacitorPlayerSettings(): JSObject? {
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val raw = sharedPrefs.getString("playerSettings", null) ?: return null
+    return try { JSObject(raw) } catch (e: JSONException) {
+      Log.e(tag, "Failed to parse playerSettings: ${e.localizedMessage}")
+      null
+    }
+  }
+
+  fun getSkipIntro():Boolean {
+    userSettingsSkipIntro?.let { return it }
+
+    // Primary: read from playerSettings (shared with JS $localStore)
+    getCapacitorPlayerSettings()?.let { ps ->
+      if (ps.has("skipIntro")) {
+        userSettingsSkipIntro = ps.getBoolean("skipIntro")
+        return userSettingsSkipIntro ?: false
+      }
+    }
+    // Legacy fallback: read from userSettings (pre-migration)
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val userSettingsPref = sharedPrefs.getString("userSettings", null)
+    if (userSettingsPref != null) {
+      try {
+        val userSettings = JSObject(userSettingsPref)
+        if (userSettings.has("skipIntro")) {
+          userSettingsSkipIntro = userSettings.getBoolean("skipIntro")
+          return userSettingsSkipIntro ?: false
+        }
+      } catch (e:JSONException) {
+        Log.e(tag, "Failed to parse skipIntro setting: ${e.localizedMessage}")
+      }
+    }
+    return false
+  }
+
+  fun getSkipOutro():Boolean {
+    userSettingsSkipOutro?.let { return it }
+
+    // Primary: read from playerSettings (shared with JS $localStore)
+    getCapacitorPlayerSettings()?.let { ps ->
+      if (ps.has("skipOutro")) {
+        userSettingsSkipOutro = ps.getBoolean("skipOutro")
+        return userSettingsSkipOutro ?: false
+      }
+    }
+    // Legacy fallback: read from userSettings (pre-migration)
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val userSettingsPref = sharedPrefs.getString("userSettings", null)
+    if (userSettingsPref != null) {
+      try {
+        val userSettings = JSObject(userSettingsPref)
+        if (userSettings.has("skipOutro")) {
+          userSettingsSkipOutro = userSettings.getBoolean("skipOutro")
+          return userSettingsSkipOutro ?: false
+        }
+      } catch (e:JSONException) {
+        Log.e(tag, "Failed to parse skipOutro setting: ${e.localizedMessage}")
+      }
+    }
+    return false
+  }
+
+  fun getGlobalIntroDuration():Double {
+    userSettingsGlobalIntroDuration?.let { return it }
+
+    // Primary: read from playerSettings (shared with JS $localStore)
+    getCapacitorPlayerSettings()?.let { ps ->
+      if (ps.has("globalIntroDuration")) {
+        userSettingsGlobalIntroDuration = ps.getDouble("globalIntroDuration")
+        return userSettingsGlobalIntroDuration ?: 10.0
+      }
+    }
+    // Legacy fallback: read from userSettings (pre-migration)
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val userSettingsPref = sharedPrefs.getString("userSettings", null)
+    if (userSettingsPref != null) {
+      try {
+        val userSettings = JSObject(userSettingsPref)
+        if (userSettings.has("globalIntroDuration")) {
+          userSettingsGlobalIntroDuration = userSettings.getDouble("globalIntroDuration")
+          return userSettingsGlobalIntroDuration ?: 10.0
+        }
+      } catch (e:JSONException) {
+        Log.e(tag, "Failed to parse globalIntroDuration setting: ${e.localizedMessage}")
+      }
+    }
+    return 10.0
+  }
+
+  fun getGlobalOutroDuration():Double {
+    userSettingsGlobalOutroDuration?.let { return it }
+
+    // Primary: read from playerSettings (shared with JS $localStore)
+    getCapacitorPlayerSettings()?.let { ps ->
+      if (ps.has("globalOutroDuration")) {
+        userSettingsGlobalOutroDuration = ps.getDouble("globalOutroDuration")
+        return userSettingsGlobalOutroDuration ?: 10.0
+      }
+    }
+    // Legacy fallback: read from userSettings (pre-migration)
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val userSettingsPref = sharedPrefs.getString("userSettings", null)
+    if (userSettingsPref != null) {
+      try {
+        val userSettings = JSObject(userSettingsPref)
+        if (userSettings.has("globalOutroDuration")) {
+          userSettingsGlobalOutroDuration = userSettings.getDouble("globalOutroDuration")
+          return userSettingsGlobalOutroDuration ?: 10.0
+        }
+      } catch (e:JSONException) {
+        Log.e(tag, "Failed to parse globalOutroDuration setting: ${e.localizedMessage}")
+      }
+    }
+    return 10.0
+  }
+
+  fun setSkipIntroSettings(skipIntro: Boolean, skipOutro: Boolean, introDuration: Double, outroDuration: Double) {
+    val sharedPrefs = ctx.getSharedPreferences("CapacitorStorage", Activity.MODE_PRIVATE)
+    val sharedPrefEditor = sharedPrefs.edit()
+    val playerSettingsPref = sharedPrefs.getString("playerSettings", null)
+
+    if (playerSettingsPref != null) {
+      try {
+        val playerSettings = JSObject(playerSettingsPref)
+        playerSettings.put("skipIntro", skipIntro)
+        playerSettings.put("skipOutro", skipOutro)
+        playerSettings.put("globalIntroDuration", introDuration)
+        playerSettings.put("globalOutroDuration", outroDuration)
+        sharedPrefEditor.putString("playerSettings", playerSettings.toString())
+        sharedPrefEditor.apply()
+
+        userSettingsSkipIntro = skipIntro
+        userSettingsSkipOutro = skipOutro
+        userSettingsGlobalIntroDuration = introDuration
+        userSettingsGlobalOutroDuration = outroDuration
+
+        Log.d(tag, "Saved intro/outro skip settings to playerSettings: skipIntro=$skipIntro, skipOutro=$skipOutro, introDuration=$introDuration, outroDuration=$outroDuration")
+      } catch (e:JSONException) {
+        Log.e(tag, "Failed to save intro/outro settings: ${e.localizedMessage}")
+      }
+    } else {
+      val playerSettings = JSONObject()
+      playerSettings.put("skipIntro", skipIntro)
+      playerSettings.put("skipOutro", skipOutro)
+      playerSettings.put("globalIntroDuration", introDuration)
+      playerSettings.put("globalOutroDuration", outroDuration)
+      sharedPrefEditor.putString("playerSettings", playerSettings.toString())
+      sharedPrefEditor.apply()
+
+      userSettingsSkipIntro = skipIntro
+      userSettingsSkipOutro = skipOutro
+      userSettingsGlobalIntroDuration = introDuration
+      userSettingsGlobalOutroDuration = outroDuration
+
+      Log.d(tag, "Created and saved intro/outro skip settings to playerSettings")
     }
   }
 

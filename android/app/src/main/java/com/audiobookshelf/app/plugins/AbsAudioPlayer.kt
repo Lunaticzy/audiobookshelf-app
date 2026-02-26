@@ -370,6 +370,18 @@ class AbsAudioPlayer : Plugin() {
   }
 
   @PluginMethod
+  fun setSkipSettings(call: PluginCall) {
+    val skipIntro = call.getBoolean("skipIntro", false) ?: false
+    val skipOutro = call.getBoolean("skipOutro", false) ?: false
+    val globalIntroDuration = call.getDouble("globalIntroDuration", 10.0) ?: 10.0
+    val globalOutroDuration = call.getDouble("globalOutroDuration", 10.0) ?: 10.0
+    Handler(Looper.getMainLooper()).post {
+      playerNotificationService.mediaManager.setSkipIntroSettings(skipIntro, skipOutro, globalIntroDuration, globalOutroDuration)
+      call.resolve()
+    }
+  }
+
+  @PluginMethod
   fun setSleepTimer(call: PluginCall) {
     val time:Long = call.getString("time", "360000")!!.toLong()
     val isChapterTime:Boolean = call.getBoolean("isChapterTime", false) == true
