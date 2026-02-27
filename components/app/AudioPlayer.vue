@@ -174,9 +174,6 @@ export default {
       coverBgIsLight: false,
       titleMarquee: null,
       isRefreshingUI: false,
-      isSkippingIntroOutro: false,
-      skipTargetTime: null,
-      skipSafetyTimeoutId: null,
       showIntroOutroDurationModal: false
     }
   },
@@ -580,11 +577,6 @@ export default {
           this.$refs.playedTrack.classList.remove('bg-yellow-300')
           this.$refs.playedTrack.classList.add('bg-gray-200')
         }
-      }
-
-      // Check and execute intro/outro skip (not supported on iOS)
-      if (this.$platform !== 'ios') {
-        this.checkAndSkipIntroOutro()
       }
 
       this.updateTimestamp()
@@ -993,93 +985,6 @@ export default {
     },
     showIntroOutroDurationDialog() {
       this.showIntroOutroDurationModal = true
-    },
-    checkAndSkipIntroOutro() {
-      // Once position reaches the skip target, clear the guard flag so normal checks can resume
-      if (this.isSkippingIntroOutro) {
-        if (this.skipTargetTime !== null && this.currentTime >= this.skipTargetTime - 0.5) {
-          this.isSkippingIntroOutro = false
-          this.skipTargetTime = null
-          // Return here: let the next timeupdate tick evaluate zones at the new position.
-          // Continuing immediately could re-trigger a skip before the player has settled,
-          // causing a cascade of skips every 5 seconds.
-          return
-        } else {
-          return
-        }
-      }
-
-      const skipIntro = this.playerSettings.skipIntro
-      const skipOutro = this.playerSettings.skipOutro
-      const globalIntroDuration = this.playerSettings.globalIntroDuration
-      const globalOutroDuration = this.playerSettings.globalOutroDuration
-
-      if (!this.currentChapter || (!skipIntro && !skipOutro)) {
-        return
-      }
-
-      const chapter = this.currentChapter
-      let introEndTime = chapter.start
-      let outroStartTime = chapter.end
-
-      if (skipIntro) {
-        introEndTime = chapter.start + globalIntroDuration
-      }
-      // Clamp: intro must not extend past chapter end
-      introEndTime = Math.min(introEndTime, chapter.end)
-
-      if (skipOutro) {
-        outroStartTime = chapter.end - globalOutroDuration
-      }
-      // Clamp: outro must not begin before chapter start
-      outroStartTime = Math.max(outroStartTime, chapter.start)
-
-      // Guard: skip if intro and outro zones overlap (chapter shorter than combined durations)
-      if (introEndTime > outroStartTime) {
-        return
-      }
-
-      const doSkip = (targetTime) => {
-        // Cancel any previous safety timeout to prevent it from clearing a subsequent skip's guard
-        clearTimeout(this.skipSafetyTimeoutId)
-        this.isSkippingIntroOutro = true
-        this.skipTargetTime = targetTime
-        this.seek(targetTime)
-        // Safety fallback: clear flag if position-based reset never fires (e.g. seek fails)
-        this.skipSafetyTimeoutId = setTimeout(() => {
-          this.isSkippingIntroOutro = false
-          this.skipTargetTime = null
-          this.skipSafetyTimeoutId = null
-        }, 5000)
-      }
-
-      // Check intro zone
-      if (skipIntro && this.currentTime >= chapter.start && this.currentTime < introEndTime) {
-        const targetTime = introEndTime + 0.5
-        console.log(`[AudioPlayer] Skip intro: from ${this.currentTime}s to ${targetTime}s`)
-        doSkip(targetTime)
-        return
-      }
-
-      // Check outro zone
-      if (skipOutro && this.currentTime >= outroStartTime && this.currentTime < chapter.end) {
-        if (this.nextChapter) {
-          // If skipIntro is also enabled, combine outro+intro into a single seek to avoid two sequential jumps
-          let targetTime = this.nextChapter.start
-          if (skipIntro) {
-            const nextIntroDuration = globalIntroDuration
-            targetTime = this.nextChapter.start + nextIntroDuration + 0.5
-            console.log(`[AudioPlayer] Skip outro+intro: from ${this.currentTime}s to ${targetTime}s`)
-          } else {
-            console.log(`[AudioPlayer] Skip outro: from ${this.currentTime}s to next chapter ${targetTime}s`)
-          }
-          doSkip(targetTime)
-        } else {
-          // Last chapter — seek to chapter end
-          console.log(`[AudioPlayer] Skip outro: from ${this.currentTime}s to chapter end ${chapter.end}s`)
-          doSkip(chapter.end)
-        }
-      }
     }
   },
   mounted() {

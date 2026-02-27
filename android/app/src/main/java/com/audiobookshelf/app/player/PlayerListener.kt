@@ -105,10 +105,12 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
         playerNotificationService.mediaProgressSyncer.play(it)
       }
+      playerNotificationService.startSkipCheckTimer()
     } else {
       playerNotificationService.mediaProgressSyncer.pause {
         Log.d(tag, "Media Progress Syncer paused and synced")
       }
+      playerNotificationService.stopSkipCheckTimer()
     }
 
     playerNotificationService.clientEventEmitter?.onPlayingUpdate(isPlaying)

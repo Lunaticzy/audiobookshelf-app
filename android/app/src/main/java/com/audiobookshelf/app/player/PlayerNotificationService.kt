@@ -140,6 +140,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   private var skipTargetTime: Double? = null
   private var skipSafetyRunnable: Runnable? = null
   private val skipHandler = Handler(Looper.getMainLooper())
+  private var skipCheckTimerTask: TimerTask? = null
 
   /*
      Service related stuff
@@ -1058,9 +1059,6 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   fun sendClientMetadata(playerState: PlayerState) {
     val duration = currentPlaybackSession?.getTotalDuration() ?: 0.0
     clientEventEmitter?.onMetadata(PlaybackMetadata(duration, getCurrentTimeSeconds(), playerState))
-    
-    // 检查并执行intro/outro跳过
-    checkAndSkipIntroOutro()
   }
 
   fun getMediaPlayer(): String {
@@ -2205,8 +2203,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               .build()
     }
   }
-  
-  // Intro/Outro skip detection — called on every metadata update
+
+  fun startSkipCheckTimer() {
+    if (skipCheckTimerTask != null) return
+    skipCheckTimerTask = Timer("SkipCheckTimer", false).schedule(1000L, 1000L) {
+      skipHandler.post { checkAndSkipIntroOutro() }
+    }
+    Log.d(tag, "Skip check timer started")
+  }
+
+  fun stopSkipCheckTimer() {
+    skipCheckTimerTask?.cancel()
+    skipCheckTimerTask = null
+    Log.d(tag, "Skip check timer stopped")
+  }
+
+  // Intro/Outro skip detection — called periodically by skip check timer
   private fun checkAndSkipIntroOutro() {
     // Once playback position reaches the skip target, clear the guard flag so normal checks can resume
     if (isSkippingIntroOutro) {
